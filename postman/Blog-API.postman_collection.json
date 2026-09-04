@@ -1,0 +1,1594 @@
+{
+  "info": {
+    "name": "Blog Application REST API",
+    "description": "REST API for a Blog Management Application with Guest, User, and Admin access.\n\nBase URL: http://localhost:5000\n\nAuth: Bearer JWT from POST /api/auth/login.\n\n## Self-contained\n\nEverything lives in this one file. Do NOT select an environment when you run it. If one is selected it must not define userId, blogId or token, because Postman resolves an environment variable before a collection variable of the same name. The collection pre-request script clears those keys from the active environment for exactly that reason. baseUrl is deliberately left alone, so an environment may still repoint the host.\n\n## Repeatable, and safe for several people at once\n\nRegister User mints a fresh runId on every send and derives a unique email from it (qa.user.<runId>@example.com), so the collection can be run any number of times, by any number of people, against one shared database without hitting 409 email already registered.\n\nThe run's blogs carry the same runId in title and category, so the public search and filter requests match this run's own rows rather than data somebody else left behind.\n\nThree identities are kept apart in their own variables: userToken (the run's user), user2Token (a second ordinary user, used for the cross-owner 403 checks) and adminToken. Sharing one token variable would let the admin login silently take over the user requests, which then rewrites the admin's own profile and password.\n\n## Needs the seeded admin\n\nRun `npm run seed:admin` before the collection. Login Admin must succeed (200) with `admin@example.com` / `password123` and stores `adminToken` / `adminUserId`. Admin-only requests then run for real; they are not skipped.\n\n## Run order\n\nRun the collection top to bottom. Deactivate User is followed immediately by Reactivate User, otherwise every later request carrying userToken answers 403. Cleanup is last so the public reads still have blogs to find.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:5000", "type": "string" },
+    { "key": "adminEmail", "value": "admin@example.com", "type": "string" },
+    { "key": "adminPassword", "value": "password123", "type": "string" },
+    { "key": "runId", "value": "", "type": "string" },
+    { "key": "userEmail", "value": "", "type": "string" },
+    { "key": "userPassword", "value": "", "type": "string" },
+    { "key": "newPassword", "value": "", "type": "string" },
+    { "key": "userToken", "value": "", "type": "string" },
+    { "key": "userId", "value": "", "type": "string" },
+    { "key": "user2Email", "value": "", "type": "string" },
+    { "key": "user2Password", "value": "", "type": "string" },
+    { "key": "user2Token", "value": "", "type": "string" },
+    { "key": "user2Id", "value": "", "type": "string" },
+    { "key": "adminToken", "value": "", "type": "string" },
+    { "key": "adminUserId", "value": "", "type": "string" },
+    { "key": "blogId", "value": "", "type": "string" },
+    { "key": "spoofBlogId", "value": "", "type": "string" },
+    { "key": "otherBlogId", "value": "", "type": "string" },
+    { "key": "blogCategory", "value": "", "type": "string" }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// environment variables beat collection variables. a leftover Local environment",
+          "// with userId=1 / blogId=1 / empty token would make almost every test 401 or 403.",
+          "// unset is a no-op when the key is absent or no environment is selected.",
+          "// do not use pm.environment.has — older Postman builds throw, which aborts",
+          "// this script and leaves those stale values in place",
+          "[",
+          "    'runId', 'userEmail', 'userPassword', 'newPassword',",
+          "    'userToken', 'userId', 'user2Email', 'user2Password', 'user2Token', 'user2Id',",
+          "    'adminToken', 'adminUserId', 'token',",
+          "    'blogId', 'spoofBlogId', 'otherBlogId', 'blogCategory'",
+          "].forEach((key) => {",
+          "    try { pm.environment.unset(key); } catch (e) {}",
+          "});",
+          "",
+          "if (!pm.collectionVariables.get('runId')) {",
+          "    pm.collectionVariables.set('runId', 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth (Public)",
+      "description": "Run this folder first. Register User mints the run's identity, then two ordinary users and the admin log in to three separate token variables.",
+      "item": [
+        {
+          "name": "Register User",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// a new run token on every send. this is the whole reason the collection",
+                  "// survives being run twice, or by two people against one database:",
+                  "// the emails below have never been registered before",
+                  "const runId = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);",
+                  "",
+                  "pm.collectionVariables.set('runId', runId);",
+                  "pm.collectionVariables.set('userEmail', 'qa.user.' + runId + '@example.com');",
+                  "pm.collectionVariables.set('userPassword', 'Passw0rd-' + runId);",
+                  "pm.collectionVariables.set('newPassword', 'Rotated-' + runId);",
+                  "pm.collectionVariables.set('user2Email', 'qa.other.' + runId + '@example.com');",
+                  "pm.collectionVariables.set('user2Password', 'Passw0rd-' + runId);",
+                  "pm.collectionVariables.set('blogCategory', 'Testing-' + runId);",
+                  "",
+                  "// stale ids and tokens from an earlier run would otherwise be reused if a",
+                  "// later request failed to overwrite them",
+                  "[",
+                  "    'userToken', 'userId', 'user2Token', 'user2Id',",
+                  "    'adminToken', 'adminUserId', 'blogId', 'spoofBlogId', 'otherBlogId'",
+                  "].forEach((key) => pm.collectionVariables.set(key, ''));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "",
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('returns the new user without a password', () => {",
+                  "    pm.expect(json.data).to.be.an('object');",
+                  "    pm.expect(json.data).to.not.have.property('password');",
+                  "});",
+                  "",
+                  "pm.test('email is the one this run generated', () => {",
+                  "    pm.expect(json.data.email).to.eql(pm.collectionVariables.get('userEmail'));",
+                  "});",
+                  "",
+                  "pm.test('defaults to role user and isActive true', () => {",
+                  "    pm.expect(json.data.role).to.eql('user');",
+                  "    pm.expect(json.data.isActive).to.be.true;",
+                  "});",
+                  "",
+                  "if (json.data && json.data.id) pm.collectionVariables.set('userId', String(json.data.id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstname\": \"Qa\",\n  \"lastname\": \"User\",\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{userPassword}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/auth/register",
+            "description": "Public. 201 Created. The email is generated per run, so repeat runs never collide. Cannot set role or isActive."
+          }
+        },
+        {
+          "name": "Register Second User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "",
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('a different id from the first user', () => {",
+                  "    pm.expect(String(json.data.id)).to.not.eql(String(pm.collectionVariables.get('userId')));",
+                  "});",
+                  "",
+                  "// this second ordinary user owns the blog that the cross-owner 403 checks",
+                  "// try to touch. using it instead of the admin means those checks still run",
+                  "// when the admin account is not seeded",
+                  "if (json.data && json.data.id) pm.collectionVariables.set('user2Id', String(json.data.id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstname\": \"Qa\",\n  \"lastname\": \"Other\",\n  \"email\": \"{{user2Email}}\",\n  \"password\": \"{{user2Password}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/auth/register",
+            "description": "A second ordinary user, so ownership can be tested user against user rather than user against admin."
+          }
+        },
+        {
+          "name": "Register Duplicate Email (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict on an email already taken', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstname\": \"Qa\",\n  \"lastname\": \"User\",\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{userPassword}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/auth/register",
+            "description": "Negative case. Re-sends the address Register User just took, so the 409 comes from this run's own data rather than a fixture."
+          }
+        },
+        {
+          "name": "Register With role (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden', () => pm.response.to.have.status(403));",
+                  "",
+                  "pm.test('refuses to let a registration set its own role', () => {",
+                  "    pm.expect(pm.response.json().message).to.include('role');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstname\": \"Sneaky\",\n  \"lastname\": \"Admin\",\n  \"email\": \"qa.sneaky.{{runId}}@example.com\",\n  \"password\": \"Passw0rd-{{runId}}\",\n  \"role\": \"admin\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/auth/register",
+            "description": "Negative case. No row is created, so this leaves nothing behind."
+          }
+        },
+        {
+          "name": "Login User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('returns a token', () => pm.expect(json.token).to.be.a('string').and.not.empty);",
+                  "",
+                  "pm.test(\"the token belongs to this run's user\", () => {",
+                  "    pm.expect(json.data.email).to.eql(pm.collectionVariables.get('userEmail'));",
+                  "});",
+                  "",
+                  "// kept apart from user2Token and adminToken so neither can clobber it",
+                  "if (json.token) pm.collectionVariables.set('userToken', json.token);",
+                  "if (json.data && json.data.id) pm.collectionVariables.set('userId', String(json.data.id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{userPassword}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Public. Saves the JWT as userToken and the id as userId."
+          }
+        },
+        {
+          "name": "Login Second User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const json = pm.response.json();",
+                  "",
+                  "if (json.token) pm.collectionVariables.set('user2Token', json.token);",
+                  "if (json.data && json.data.id) pm.collectionVariables.set('user2Id', String(json.data.id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{user2Email}}\",\n  \"password\": \"{{user2Password}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Stores user2Token, used only for the ownership checks."
+          }
+        },
+        {
+          "name": "Login Wrong Password (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));",
+                  "",
+                  "pm.test('does not say which half was wrong', () => {",
+                  "    pm.expect(pm.response.json().message).to.eql('invalid email or password');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"definitely-not-the-password\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Negative case. An unknown email and a wrong password answer the same message on purpose."
+          }
+        },
+        {
+          "name": "Login Admin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('the account is an admin', () => pm.expect(json.data.role).to.eql('admin'));",
+                  "",
+                  "pm.test('returns a token', () => pm.expect(json.token).to.be.a('string'));",
+                  "",
+                  "if (json.token) pm.collectionVariables.set('adminToken', json.token);",
+                  "if (json.data && json.data.id) pm.collectionVariables.set('adminUserId', String(json.data.id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Must succeed. Seed first with `npm run seed:admin` (admin@example.com / password123). Saves adminToken and adminUserId, separate from the user variables. This collection never changes the admin password or profile."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users (Admin)",
+      "description": "Every request here uses adminToken from Login Admin. Deactivate is paired with Reactivate so userToken stays usable downstream.",
+      "item": [
+        {
+          "name": "Get All Users",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('returns a list', () => pm.expect(json.data).to.be.an('array'));",
+                  "",
+                  "pm.test('no password on any row', () => {",
+                  "    json.data.forEach((user) => pm.expect(user).to.not.have.property('password'));",
+                  "});",
+                  "",
+                  "// asserted against this run's own user rather than a row count, which would",
+                  "// drift as other people register",
+                  "pm.test(\"this run's user is in the list\", () => {",
+                  "    const ids = json.data.map((user) => String(user.id));",
+                  "    pm.expect(ids).to.include(String(pm.collectionVariables.get('userId')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/api/users",
+            "description": "Admin only. Unpaged, so the whole table comes back. Password is never returned."
+          }
+        },
+        {
+          "name": "Get All Users (paged)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('honours the page size', () => {",
+                  "    pm.expect(json.meta.page).to.eql(1);",
+                  "    pm.expect(json.meta.limit).to.eql(5);",
+                  "    pm.expect(json.data.length).to.be.at.most(5);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/api/users?page=1&limit=5",
+            "description": "Admin only. page or limit opts into paging and adds the meta block. limit is capped at 100."
+          }
+        },
+        {
+          "name": "Get User by ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test(\"returns this run's user\", () => {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(String(json.data.id)).to.eql(String(pm.collectionVariables.get('userId')));",
+                  "    pm.expect(json.data.email).to.eql(pm.collectionVariables.get('userEmail'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+            "url": "{{baseUrl}}/api/users/{{userId}}",
+            "description": "Admin only. Reads the id this run registered, never a hardcoded 1."
+          }
+        },
+        {
+          "name": "Get Users as User (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden for a non-admin', () => pm.response.to.have.status(403));",
+                  "",
+                  "pm.test('says admin access is required', () => {",
+                  "    pm.expect(pm.response.json().message).to.eql('admin access required');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{userToken}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": "{{baseUrl}}/api/users",
+            "description": "Negative case. Needs no admin, so it runs whether or not the admin is seeded."
+          }
+        },
+        {
+          "name": "Get Users with No Token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized without a token', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/users",
+            "description": "Negative case. No Authorization header at all."
+          }
+        },
+        {
+          "name": "Deactivate User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('isActive is now false', () => {",
+                  "    pm.expect(pm.response.json().data.isActive).to.be.false;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] },
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isActive\": false\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/users/{{userId}}/status",
+            "description": "Admin only, and aimed at this run's own user so it can never deactivate somebody else. Reactivate User follows immediately."
+          }
+        },
+        {
+          "name": "Login While Deactivated (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden', () => pm.response.to.have.status(403));",
+                  "",
+                  "pm.test('says the account is deactivated', () => {",
+                  "    pm.expect(pm.response.json().message).to.eql('this account has been deactivated');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{userPassword}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Proves the deactivation landed: correct credentials, still refused."
+          }
+        },
+        {
+          "name": "Reactivate User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('isActive is back to true', () => {",
+                  "    pm.expect(pm.response.json().data.isActive).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] },
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isActive\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/users/{{userId}}/status",
+            "description": "Restores the account. Without this every later request carrying userToken answers 403."
+          }
+        },
+        {
+          "name": "Admin Cannot Deactivate Self (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('refuses a self status change', () => {",
+                  "    pm.expect(pm.response.json().message).to.eql('an admin cannot change their own status');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] },
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isActive\": false\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/users/{{adminUserId}}/status",
+            "description": "Negative case. Guards against locking out the only account that can manage the others."
+          }
+        },
+        {
+          "name": "Status With Bad Body (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('isActive has to be a real boolean', () => {",
+                  "    pm.expect(pm.response.json().message).to.eql('isActive must be true or false');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] },
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isActive\": \"nope\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/users/{{userId}}/status",
+            "description": "Negative case. The string \"nope\" is not a boolean, so nothing is written."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Profile (User and Admin)",
+      "description": "Uses userToken only. Nothing here touches the admin account, so seeding survives any number of runs. The password change is followed by a fresh login so userToken and userPassword stay in step with the row.",
+      "item": [
+        {
+          "name": "Get Own Profile",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('answers with the caller, not another row', () => {",
+                  "    pm.expect(String(json.data.id)).to.eql(String(pm.collectionVariables.get('userId')));",
+                  "    pm.expect(json.data.email).to.eql(pm.collectionVariables.get('userEmail'));",
+                  "});",
+                  "",
+                  "pm.test('password is omitted', () => pm.expect(json.data).to.not.have.property('password'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{userToken}}", "type": "string" }] },
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": "{{baseUrl}}/api/users/profile",
+            "description": "The row is picked by the id inside the token, so this route can only return the caller's own record."
+          }
+        },
+        {
+          "name": "Update Own Profile",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "// the run token is in the value, so this asserts what this run wrote and not",
+                  "// a name some other run left",
+                  "pm.test('lastname was written', () => {",
+                  "    pm.expect(pm.response.json().data.lastname).to.eql('Updated-' + pm.collectionVariables.get('runId'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{userToken}}", "type": "string" }] },
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstname\": \"Qa\",\n  \"lastname\": \"Updated-{{runId}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/users/profile/update",
+            "description": "firstname, lastname and email only. role and isActive are refused."
+          }
+        },
+        {
+          "name": "Update Profile with role (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden', () => pm.response.to.have.status(403));",
+                  "",
+                  "pm.test('names the blocked field', () => {",
+                  "    pm.expect(pm.response.json().message).to.include('role');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{userToken}}", "type": "string" }] },
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstname\": \"Qa\",\n  \"role\": \"admin\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/users/profile/update",
+            "description": "Negative case. A self-promotion attempt is refused out loud rather than dropped quietly."
+          }
+        },
+        {
+          "name": "Update Profile Empty Body (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('asks for at least one editable field', () => {",
+                  "    pm.expect(pm.response.json().message).to.include('at least one');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{userToken}}", "type": "string" }] },
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/users/profile/update",
+            "description": "Negative case. A body with nothing editable would otherwise report success while changing nothing."
+          }
+        },
+        {
+          "name": "Update Password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('returns the id only, never the new hash', () => {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.data).to.have.property('id');",
+                  "    pm.expect(json.data).to.not.have.property('password');",
+                  "});",
+                  "",
+                  "// the stored password is the rotated one from here on. keeping userPassword in",
+                  "// step means a later re-run of Login User in the same session still works",
+                  "if (pm.response.code === 200) {",
+                  "    pm.collectionVariables.set('userPassword', pm.collectionVariables.get('newPassword'));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{userToken}}", "type": "string" }] },
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"password\": \"{{newPassword}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/users/password",
+            "description": "Hashes the new password before saving. The value is generated per run, and only ever for this run's own user."
+          }
+        },
+        {
+          "name": "Update Password Too Short (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('states the minimum length', () => {",
+                  "    pm.expect(pm.response.json().message).to.include('at least 6');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{userToken}}", "type": "string" }] },
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"password\": \"abc\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/users/password",
+            "description": "Negative case. The rule lives in one place and is shared with register."
+          }
+        },
+        {
+          "name": "Login With New Password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK with the rotated password', () => pm.response.to.have.status(200));",
+                  "",
+                  "const json = pm.response.json();",
+                  "",
+                  "// the old token stays valid until it expires, but replacing it keeps the",
+                  "// collection honest about which credential it is using",
+                  "if (json.token) pm.collectionVariables.set('userToken', json.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{userEmail}}\",\n  \"password\": \"{{newPassword}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Confirms the rotation landed, and refreshes userToken."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Blogs (User and Admin)",
+      "description": "Runs before the public folder, because the public searches look for the blogs created here. Ownership is tested user against user (userToken vs user2Token), so the whole 403 story still runs when the admin is not seeded. Only the admin-override requests skip themselves.",
+      "item": [
+        {
+          "name": "Create Blog",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "",
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('the author is the caller, taken from the token', () => {",
+                  "    pm.expect(String(json.data.userId)).to.eql(String(pm.collectionVariables.get('userId')));",
+                  "});",
+                  "",
+                  "pm.test('title carries the run token', () => {",
+                  "    pm.expect(json.data.blogTitle).to.include(pm.collectionVariables.get('runId'));",
+                  "});",
+                  "",
+                  "if (json.data && json.data.id) pm.collectionVariables.set('blogId', String(json.data.id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{userToken}}", "type": "string" }] },
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"blogTitle\": \"Introduction to API Testing {{runId}}\",\n  \"blog\": \"This article explains the fundamentals of API testing. Written by run {{runId}}.\",\n  \"category\": \"{{blogCategory}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/blogs/create",
+            "description": "userId comes from the token, not the body. Saves blogId."
+          }
+        },
+        {
+          "name": "Create Blog Body Ignores userId",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "",
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('the userId in the body was ignored', () => {",
+                  "    pm.expect(String(json.data.userId)).to.eql(String(pm.collectionVariables.get('userId')));",
+                  "    pm.expect(String(json.data.userId)).to.not.eql('99999');",
+                  "});",
+                  "",
+                  "// deleted again in Cleanup",
+                  "if (json.data && json.data.id) pm.collectionVariables.set('spoofBlogId', String(json.data.id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{userToken}}", "type": "string" }] },
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"blogTitle\": \"Spoof attempt {{runId}}\",\n  \"blog\": \"This body claims another author.\",\n  \"category\": \"{{blogCategory}}\",\n  \"userId\": 99999\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/blogs/create",
+            "description": "A caller cannot post under another name: the body's userId is never read."
+          }
+        },
+        {
+          "name": "Create Blog Missing Field (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{userToken}}", "type": "string" }] },
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"blogTitle\": \"No body and no category {{runId}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/blogs/create",
+            "description": "Negative case. blogTitle, blog and category are all required on create."
+          }
+        },
+        {
+          "name": "Create Second User's Blog",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "",
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('owned by the second user', () => {",
+                  "    pm.expect(String(json.data.userId)).to.eql(String(pm.collectionVariables.get('user2Id')));",
+                  "});",
+                  "",
+                  "// the target for the cross-owner 403 checks. owned by an ordinary user, so",
+                  "// those checks do not need the admin to exist",
+                  "if (json.data && json.data.id) pm.collectionVariables.set('otherBlogId', String(json.data.id));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{user2Token}}", "type": "string" }] },
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{user2Token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"blogTitle\": \"Owned by the other user {{runId}}\",\n  \"blog\": \"Belongs to the second user of run {{runId}}.\",\n  \"category\": \"{{blogCategory}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/blogs/create",
+            "description": "Sets up the ownership checks below. Deleted again in Cleanup."
+          }
+        },
+        {
+          "name": "Update Own Blog",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('the new title was saved and still carries the run token', () => {",
+                  "    pm.expect(json.data.blogTitle).to.include(pm.collectionVariables.get('runId'));",
+                  "    pm.expect(json.data.blogTitle).to.include('Updated');",
+                  "});",
+                  "",
+                  "pm.test('the blog did not change hands', () => {",
+                  "    pm.expect(String(json.data.userId)).to.eql(String(pm.collectionVariables.get('userId')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{userToken}}", "type": "string" }] },
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"blogTitle\": \"Updated API Testing {{runId}}\",\n  \"blog\": \"Updated blog content for run {{runId}}.\",\n  \"category\": \"{{blogCategory}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/blogs/update/{{blogId}}",
+            "description": "Owner path. The category stays this run's category so the public filter below still matches."
+          }
+        },
+        {
+          "name": "Update Another User's Blog (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden', () => pm.response.to.have.status(403));",
+                  "",
+                  "pm.test('says the caller is not authorized', () => {",
+                  "    pm.expect(pm.response.json().message).to.eql('You are not authorized to update this blog.');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{userToken}}", "type": "string" }] },
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"blogTitle\": \"Hijack attempt {{runId}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/blogs/update/{{otherBlogId}}",
+            "description": "Negative case, user against user. One ordinary user editing another's blog is refused."
+          }
+        },
+        {
+          "name": "Admin Updates Any Blog",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK, an admin may edit any blog', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('still owned by the original author', () => {",
+                  "    pm.expect(String(pm.response.json().data.userId)).to.eql(String(pm.collectionVariables.get('userId')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] },
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"blog\": \"Edited by the admin during run {{runId}}.\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/blogs/update/{{blogId}}",
+            "description": "The admin override. Only the body text changes, so the title and category the public folder searches for survive."
+          }
+        },
+        {
+          "name": "Update Missing Blog (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{userToken}}", "type": "string" }] },
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"blogTitle\": \"Nobody home {{runId}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/blogs/update/99999999",
+            "description": "Negative case. A missing id answers 404 before any ownership check, so 403 never leaks which ids exist."
+          }
+        },
+        {
+          "name": "Create Blog with No Token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"blogTitle\": \"Guest post {{runId}}\",\n  \"blog\": \"Guests cannot write.\",\n  \"category\": \"{{blogCategory}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/blogs/create",
+            "description": "Negative case. Writing is for logged-in users only."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Blogs (Public / Guest)",
+      "description": "No token anywhere in this folder. Every search is narrowed by the run token, so the assertions hold no matter how much other data is in the table.",
+      "item": [
+        {
+          "name": "Get All Blogs",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK without a token', () => pm.response.to.have.status(200));",
+                  "",
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('returns a list', () => pm.expect(json.data).to.be.an('array'));",
+                  "",
+                  "// a row count would drift as other people add blogs, so the check is that",
+                  "// this run's blog is somewhere in the list",
+                  "pm.test(\"this run's blog is present\", () => {",
+                  "    const ids = json.data.map((blog) => String(blog.id));",
+                  "    pm.expect(ids).to.include(String(pm.collectionVariables.get('blogId')));",
+                  "});",
+                  "",
+                  "pm.test('the author block is id, firstname, lastname only', () => {",
+                  "    const mine = json.data.find((blog) => String(blog.id) === String(pm.collectionVariables.get('blogId')));",
+                  "    pm.expect(mine.author).to.have.all.keys('id', 'firstname', 'lastname');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/blogs",
+            "description": "Public. Newest first. The author's email and password are never part of a public read."
+          }
+        },
+        {
+          "name": "Search Blogs by Title",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const json = pm.response.json();",
+                  "const runId = pm.collectionVariables.get('runId');",
+                  "",
+                  "pm.test(\"finds this run's blogs\", () => pm.expect(json.data.length).to.be.at.least(1));",
+                  "",
+                  "// the strong claim: searching this run's token cannot return anybody else's",
+                  "// rows, which is what makes a shared database safe here",
+                  "pm.test('every hit belongs to this run', () => {",
+                  "    json.data.forEach((blog) => pm.expect(blog.blogTitle).to.include(runId));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/blogs?title={{runId}}",
+            "description": "Public. Partial match on blogTitle. Searching the run token isolates this run's own rows."
+          }
+        },
+        {
+          "name": "Filter Blogs by Category",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const json = pm.response.json();",
+                  "const category = pm.collectionVariables.get('blogCategory');",
+                  "",
+                  "pm.test('at least one match', () => pm.expect(json.data.length).to.be.at.least(1));",
+                  "",
+                  "pm.test('the category matches exactly', () => {",
+                  "    json.data.forEach((blog) => pm.expect(blog.category).to.eql(category));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/blogs?category={{blogCategory}}",
+            "description": "Public. Exact category filter. The category is generated per run (Testing-<runId>)."
+          }
+        },
+        {
+          "name": "Search and Filter Blogs",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const json = pm.response.json();",
+                  "const runId = pm.collectionVariables.get('runId');",
+                  "const category = pm.collectionVariables.get('blogCategory');",
+                  "",
+                  "pm.test('both filters were applied', () => {",
+                  "    pm.expect(json.data.length).to.be.at.least(1);",
+                  "    json.data.forEach((blog) => {",
+                  "        pm.expect(blog.blogTitle).to.include(runId);",
+                  "        pm.expect(blog.category).to.eql(category);",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/blogs?title={{runId}}&category={{blogCategory}}",
+            "description": "Public. Combined title search and category filter, both narrowed to this run."
+          }
+        },
+        {
+          "name": "Search With No Match",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK, an empty search is still a successful search', () => pm.response.to.have.status(200));",
+                  "",
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test('empty list and the no-match wording', () => {",
+                  "    pm.expect(json.data).to.be.an('array').that.is.empty;",
+                  "    pm.expect(json.message).to.eql('no blogs matched');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/blogs?title=nothing-matches-{{runId}}-zzz",
+            "description": "The status stays 200 and only the wording changes. The needle carries the run token so it can never accidentally match."
+          }
+        },
+        {
+          "name": "Get Blog by ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "const json = pm.response.json();",
+                  "",
+                  "pm.test(\"returns this run's blog with its author\", () => {",
+                  "    pm.expect(String(json.data.id)).to.eql(String(pm.collectionVariables.get('blogId')));",
+                  "    pm.expect(json.data.author).to.have.all.keys('id', 'firstname', 'lastname');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/blogs/{{blogId}}",
+            "description": "Public. Reads the id this run created."
+          }
+        },
+        {
+          "name": "Get Missing Blog (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));",
+                  "",
+                  "pm.test('says the blog was not found', () => {",
+                  "    pm.expect(pm.response.json().message).to.eql('blog not found');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/blogs/99999999",
+            "description": "Negative case."
+          }
+        },
+        {
+          "name": "Get Blog by Bad ID (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request for a non-numeric id', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/blogs/not-a-number",
+            "description": "Negative case. The id off the url has to be a positive integer before it reaches the database."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cleanup",
+      "description": "Runs last so the folders above still have data to read. Deletes the three blogs this run created, which is what keeps a shared database from filling up when the collection is run over and over.\n\nThe user rows stay: the API has no delete-user endpoint, and every run registers fresh emails anyway.",
+      "item": [
+        {
+          "name": "Delete Blog With No Token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "DELETE",
+            "url": "{{baseUrl}}/api/blogs/delete/{{blogId}}",
+            "description": "Negative case, deliberately before the real delete so there is still something to refuse."
+          }
+        },
+        {
+          "name": "Delete Another User's Blog (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden', () => pm.response.to.have.status(403));",
+                  "",
+                  "pm.test('says the caller is not authorized', () => {",
+                  "    pm.expect(pm.response.json().message).to.eql('You are not authorized to delete this blog.');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{userToken}}", "type": "string" }] },
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": "{{baseUrl}}/api/blogs/delete/{{otherBlogId}}",
+            "description": "Negative case, user against user. Ownership is enforced on delete exactly as on update."
+          }
+        },
+        {
+          "name": "Delete Own Blog",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('returns the deleted id', () => {",
+                  "    pm.expect(String(pm.response.json().data.id)).to.eql(String(pm.collectionVariables.get('blogId')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{userToken}}", "type": "string" }] },
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": "{{baseUrl}}/api/blogs/delete/{{blogId}}",
+            "description": "Submission path DELETE /api/blogs/delete/:id. Owner or admin."
+          }
+        },
+        {
+          "name": "Delete Spoof Blog",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{userToken}}", "type": "string" }] },
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userToken}}" }],
+            "url": "{{baseUrl}}/api/blogs/delete/{{spoofBlogId}}",
+            "description": "Tidies up the row created by Create Blog Body Ignores userId."
+          }
+        },
+        {
+          "name": "Delete Second User's Blog",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK, the owner may delete their own blog', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{user2Token}}", "type": "string" }] },
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{user2Token}}" }],
+            "url": "{{baseUrl}}/api/blogs/delete/{{otherBlogId}}",
+            "description": "The same row the 403 above could not touch, now deleted by its actual owner. Tidies up Create Second User's Blog."
+          }
+        },
+        {
+          "name": "Deleted Blog Is Gone (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found, the delete really removed the row', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/blogs/{{blogId}}",
+            "description": "Confirms the delete rather than trusting the 200 above."
+          }
+        }
+      ]
+    }
+  ]
+}

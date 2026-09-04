@@ -434,11 +434,20 @@ postman/Blog-API.postman_collection.json
 postman/Blog-API.postman_environment.json
 ```
 
-The default environment contains:
+The default environment contains only:
 
 ```text
 baseUrl = http://localhost:5000
 ```
+
+Do not put `userId`, `blogId`, or tokens in the environment. Those are written as collection variables during the run. Stale IDs (for example `userId = 1`) make most tests 401/403.
+
+Before you run:
+
+1. Re-import `postman/Blog-API.postman_collection.json` (replace the old copy).
+2. Import or update `postman/Blog-API.postman_environment.json`.
+3. Start the API (`npm run dev`) and seed the admin (`npm run seed:admin`).
+4. In Postman, select **Blog API Local**, then **Run collection** from the top of the collection (all folders, in order). Do not run a single folder in isolation.
 
 The Postman requests automatically store important values such as:
 
