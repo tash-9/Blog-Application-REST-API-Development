@@ -43,7 +43,7 @@ To generate a public Postman documentation URL:
 
 **Postman → Open Collection → View documentation → Publish**
 
-Doc View Link: 
+Doc View Link: https://documenter.getpostman.com/view/54614618/2sBYAvwBHE
 
 ---
 
@@ -147,7 +147,7 @@ Doc View Link:
 │   └── API.md                     # Detailed API reference
 │
 ├── postman/
-│   ├── Blog-API.postman_collection.json
+│   └── Blog-API.postman_collection.json
 │
 ├── .env.example                   # Environment variable template
 ├── .gitignore
