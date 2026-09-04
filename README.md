@@ -38,15 +38,12 @@ The Postman collection is available in the repository:
 
 `postman/Blog-API.postman_collection.json`
 
-The Postman environment is available in:
-
-`postman/Blog-API.postman_environment.json`
 
 To generate a public Postman documentation URL:
 
 **Postman → Open Collection → View documentation → Publish**
 
-Then add the generated documentation URL to this section.
+Doc View Link: 
 
 ---
 
@@ -151,7 +148,6 @@ Then add the generated documentation URL to this section.
 │
 ├── postman/
 │   ├── Blog-API.postman_collection.json
-│   └── Blog-API.postman_environment.json
 │
 ├── .env.example                   # Environment variable template
 ├── .gitignore
@@ -167,8 +163,8 @@ Then add the generated documentation URL to this section.
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/<your-username>/<repo-name>.git
-cd <repo-name>
+git clone https://github.com/tash-9/Blog-Application-REST-API-Development.git
+cd Blog-Application-REST-API-Developmen
 ```
 
 ### 2. Create the MySQL database
@@ -510,6 +506,6 @@ This flow can be executed through the included Postman collection.
 
 ## ✍️ Author
 
-**Your Name**
+Tasfia Islam Raisha
 
-GitHub: `https://github.com/<your-username>`
+GitHub: `https://github.com/tash-9`
